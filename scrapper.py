@@ -1,6 +1,7 @@
 import requests
 from bs4 import BeautifulSoup
 import urllib.parse
+import pandas as pd
 
 BASE = "https://books.toscrape.com/"
 
@@ -10,7 +11,7 @@ CATEGORIES = {
     "NonFiction": BASE + "catalogue/category/books/nonfiction_13/index.html"
 }
 
-def Parse_book_card(article_tag, category_name):
+def parse_book_card(article_tag, category_name):
     title = article_tag.h3.a["title"]
     price = article_tag.find("p", class_="price_color").get_text(strip=True)
     star_rating = article_tag.find("p", class_="star-rating")["class"][1]
@@ -28,11 +29,13 @@ def scrape_category(start_url, category_name):
     books = []
     url = start_url
     while url:
-        resp = requests.get(url)
+        resp = requests.get(url, timeout=15)
+        resp.raise_for_status()
+        resp.encoding = "utf-8"
         soup = BeautifulSoup(resp.text, "html.parser")
         tags = soup.find_all("article", class_="product_pod")
         for tag in tags:
-            book = Parse_book_card(tag, category_name)
+            book = parse_book_card(tag, category_name)
             books.append(book)
         next_li = soup.find("li", class_="next")
         if next_li:
@@ -42,6 +45,18 @@ def scrape_category(start_url, category_name):
             url = None
     return books
 
-books = scrape_category(BASE + "catalogue/category/books/sequential-art_5/index.html", "Sequential Art")
-print(len(books))
-print(books[0])
+all_books = []
+for name, url in CATEGORIES.items():
+    books = scrape_category(url, name)
+    all_books.extend(books)
+
+print(f"Total Books: {len(all_books)}")
+categories_found = set(
+    book['category']
+    for book in all_books
+)
+
+print("Categories found:", categories_found)
+pd.DataFrame(all_books).to_csv("raw_books.csv", index=False)
+
+print("Saved raw_books.csv")
