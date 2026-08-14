@@ -8,12 +8,32 @@ MODEL_NAME = "all-MiniLM-L6-v2"
 COLLECTION_NAME = "zepto_policy"
 
 
-def chunk_text(text, chunk_size=200):
-    """Split text into chunks of approximately chunk_size characters."""
-    return [
-        text[i:i + chunk_size]
-        for i in range(0, len(text), chunk_size)
-    ]
+def chunk_text(text, chunk_size=500):
+    """Split text into sentence-aware chunks."""
+
+    sentences = text.replace("\n", " ").split(". ")
+
+    chunks = []
+    current = ""
+
+    for sentence in sentences:
+        sentence = sentence.strip()
+
+        if not sentence:
+            continue
+
+        if len(current) + len(sentence) + 2 <= chunk_size:
+            current += sentence + ". "
+        else:
+            if current:
+                chunks.append(current.strip())
+
+            current = sentence + ". "
+
+    if current:
+        chunks.append(current.strip())
+
+    return chunks
 
 
 def embed_documents():

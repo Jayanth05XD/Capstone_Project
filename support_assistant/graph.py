@@ -23,10 +23,8 @@ class AgentState(TypedDict, total=False):
     confidence: float
 
 
-# Embedding model
 model = SentenceTransformer(MODEL_NAME)
 
-# Persistent ChromaDB
 client = chromadb.PersistentClient(
     path=str(CHROMA_DIR)
 )
@@ -37,100 +35,71 @@ collection = client.get_collection(
 
 
 def classify_intent(state: AgentState) -> AgentState:
-    """Classify the query using the required keyword heuristic."""
-
     query = state["query"].lower()
 
-    policy_keywords = [
-        "delivery",
-        "return",
-        "refund",
-        "membership",
-        "tracking",
-        "cancel",
-        "gift card",
-        "support hours",
+    keywords = [
+        "delivery", "deliver", "return", "refund",
+        "membership", "track", "tracking", "cancel",
+        "gift card", "support hours"
     ]
 
-    if any(keyword in query for keyword in policy_keywords):
-        state["intent"] = "policy_question"
-    else:
-        state["intent"] = "general_question"
+    state["intent"] = (
+        "policy_question"
+        if any(word in query for word in keywords)
+        else "general_question"
+    )
 
     return state
 
 
 def retrieve_and_answer(state: AgentState) -> AgentState:
-    """Retrieve the top 3 relevant chunks and generate a mock answer."""
-
     query = state["query"]
 
-    query_embedding = model.encode(query).tolist()
+    embedding = model.encode(query).tolist()
 
     results = collection.query(
-        query_embeddings=[query_embedding],
+        query_embeddings=[embedding],
         n_results=3,
-        include=["documents", "metadatas", "distances"],
+        include=["documents", "metadatas", "distances"]
     )
 
-    retrieved_chunks = results["documents"][0]
+    chunks = results["documents"][0]
     metadatas = results["metadatas"][0]
+    distances = results["distances"][0]
 
-    sources = list(
+    state["retrieved_chunks"] = chunks
+    state["sources"] = list(
         dict.fromkeys(
             metadata["source"]
             for metadata in metadatas
         )
     )
 
-    state["retrieved_chunks"] = retrieved_chunks
-    state["sources"] = sources
+    if not chunks:
+        state["answer"] = (
+            "Based on the retrieved context: "
+            "No relevant policy information was found."
+        )
+        state["confidence"] = 0.0
+        return state
 
-    # Graded baseline: deterministic mock response.
-    mock_llm = os.getenv("MOCK_LLM", "1")
+    state["answer"] = (
+        "Based on the retrieved context: "
+        + chunks[0]
+    )
 
-    if mock_llm != "0":
-        if retrieved_chunks:
-            top_chunk = retrieved_chunks[0]
-
-            state["answer"] = (
-                "Based on the retrieved context: "
-                + top_chunk
-            )
-        else:
-            state["answer"] = (
-                "Based on the retrieved context: "
-                "No relevant policy information was found."
-            )
-
-        state["confidence"] = 1.0
-
-    else:
-        # Real LLM integration can be added here later.
-        # Keep the project functional without an API key.
-        if retrieved_chunks:
-            state["answer"] = (
-                "Based on the retrieved context: "
-                + retrieved_chunks[0]
-            )
-        else:
-            state["answer"] = (
-                "Based on the retrieved context: "
-                "No relevant policy information was found."
-            )
-
-        state["confidence"] = 1.0
+    state["confidence"] = round(
+        max(0.0, min(1.0, 1.0 - distances[0])),
+        2
+    )
 
     return state
 
 
 def direct_answer(state: AgentState) -> AgentState:
-    """Return the required mock response for general questions."""
-
     state["answer"] = (
         "I can only answer questions about Zepto policies right now."
     )
-
     state["sources"] = []
     state["retrieved_chunks"] = []
     state["confidence"] = 1.0
@@ -139,15 +108,13 @@ def direct_answer(state: AgentState) -> AgentState:
 
 
 def route_by_intent(state: AgentState) -> str:
-    """Choose the next node based on the classified intent."""
+    return (
+        "retrieve_and_answer"
+        if state["intent"] == "policy_question"
+        else "direct_answer"
+    )
 
-    if state["intent"] == "policy_question":
-        return "retrieve_and_answer"
 
-    return "direct_answer"
-
-
-# Build LangGraph
 workflow = StateGraph(AgentState)
 
 workflow.add_node("classify_intent", classify_intent)
@@ -156,14 +123,13 @@ workflow.add_node("direct_answer", direct_answer)
 
 workflow.set_entry_point("classify_intent")
 
-# Conditional routing
 workflow.add_conditional_edges(
     "classify_intent",
     route_by_intent,
     {
         "retrieve_and_answer": "retrieve_and_answer",
-        "direct_answer": "direct_answer",
-    },
+        "direct_answer": "direct_answer"
+    }
 )
 
 workflow.add_edge("retrieve_and_answer", END)
